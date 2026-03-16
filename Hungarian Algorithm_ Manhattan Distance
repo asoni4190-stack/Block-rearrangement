@@ -1,0 +1,103 @@
+import pandas as pd
+import numpy as np
+from google.colab import files
+from scipy.optimize import linear_sum_assignment
+
+
+
+!pip install xlsxwriter scipy
+
+# Distance Function
+
+def manhattan_distance(x1, y1, x2, y2):
+    return abs(x1 - x2) + abs(y1 - y2)
+
+
+# Upload Excel Files
+
+print("Upload OLD blocks Excel file")
+old_file = list(files.upload().keys())[0]
+
+print("Upload NEW positions Excel file")
+new_file = list(files.upload().keys())[0]
+
+old_df = pd.read_excel(old_file)
+new_df = pd.read_excel(new_file)
+
+# Standardize column names to lowercase
+old_df.columns = old_df.columns.str.lower()
+new_df.columns = new_df.columns.str.lower()
+# Column Validation
+
+required_columns = ['line id', 'easting', 'northing', 'block weight']
+
+for col in required_columns:
+    if col not in old_df.columns:
+        raise ValueError(f"Missing column in OLD blocks file: {col}")
+    if col not in new_df.columns:
+        raise ValueError(f"Missing column in NEW positions file: {col}")
+
+
+# Cost Matrix (STRICT weight)
+
+num_blocks = len(old_df)
+num_positions = len(new_df)
+
+BIG_NUMBER = 10**9
+cost_matrix = np.full((num_blocks, num_positions), BIG_NUMBER)
+
+for i in range(num_blocks):
+    for j in range(num_positions):
+        if old_df.at[i, 'block weight'] == new_df.at[j, 'block weight']:
+            cost_matrix[i, j] = manhattan_distance(
+                old_df.at[i, 'easting'],
+                old_df.at[i, 'northing'],
+                new_df.at[j, 'easting'],
+                new_df.at[j, 'northing']
+            )
+
+
+# Hungarian Algorithm
+
+row_ind, col_ind = linear_sum_assignment(cost_matrix)
+
+
+assignments = []
+assigned_positions = set()
+
+for r, c in zip(row_ind, col_ind):
+    if cost_matrix[r, c] >= BIG_NUMBER:
+        continue  # skip invalid weight matches
+
+    assigned_positions.add(c)
+
+    assignments.append({
+        "Old Block ID": old_df.at[r, 'line id'],
+        "Old X": old_df.at[r, 'easting'],
+        "Old Y": old_df.at[r, 'northing'],
+        "Old Weight": old_df.at[r, 'block weight'],
+        "New Position ID": new_df.at[c, 'line id'],
+        "New X": new_df.at[c, 'easting'],
+        "New Y": new_df.at[c, 'northing'],
+        "Required Weight": new_df.at[c, 'block weight'],
+        "Manhattan Distance": cost_matrix[r, c]
+    })
+
+
+# New Blocks Required
+
+new_blocks_required = new_df.drop(index=list(assigned_positions))
+
+
+# Writing the Output Excel file
+
+output_file = "Block_Rearrangement_Result_Strict_Weight.xlsx"
+
+with pd.ExcelWriter(output_file, engine="xlsxwriter") as writer:
+    pd.DataFrame(assignments).to_excel(writer, sheet_name="Assignments", index=False)
+    new_blocks_required.to_excel(writer, sheet_name="New_Blocks_Required", index=False)
+
+
+# Downloading Result
+
+files.download(output_file)
